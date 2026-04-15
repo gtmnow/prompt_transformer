@@ -1,0 +1,35 @@
+default:
+  resolved_model: generic-default
+  policy:
+    structure_preference: medium
+    format_strictness: medium
+    verbosity: medium
+    stepwise: helpful
+
+providers:
+  openai:
+    default_model: gpt-4.1
+    models:
+      gpt-4.1:
+        structure_preference: high
+        format_strictness: high
+        verbosity: medium
+        stepwise: helpful
+      gpt-4.1-mini:
+        structure_preference: medium
+        format_strictness: high
+        verbosity: low
+        stepwise: helpful
+      gpt-5.4:
+        structure_preference: high
+        format_strictness: high
+        verbosity: medium
+        stepwise: helpful
+  anthropic:
+    default_model: claude-3-5-sonnet
+    models:
+      claude-3-5-sonnet:
+        structure_preference: medium
+        format_strictness: medium
+        verbosity: high
+        stepwise: helpful

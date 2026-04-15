@@ -1,0 +1,162 @@
+from __future__ import annotations
+
+from sqlalchemy.orm import Session
+
+from app.schemas.transform import TransformMetadata, TransformPromptRequest, TransformPromptResponse
+from app.services.llm_policy import LLMPolicyService
+from app.services.profile_resolver import ProfileResolver
+from app.services.request_logger import RequestLogger
+from app.services.task_inference import TaskInferenceService
+
+
+TASK_INSTRUCTION_DEFAULTS = {
+    "summarization": "Summarize the content according to the guidance below.",
+    "explanation": "Explain the topic according to the guidance below.",
+    "writing": "Produce polished writing according to the guidance below.",
+    "planning": "Create a practical plan according to the guidance below.",
+    "analysis": "Analyze the material according to the guidance below.",
+    "recommendation": "Recommend the best option according to the guidance below.",
+    "decision_support": "Provide decision support according to the guidance below.",
+    "unknown": "Respond to the user's request according to the guidance below.",
+}
+
+
+class TransformerEngine:
+    def __init__(self, db_session: Session):
+        self.db_session = db_session
+        self.profile_resolver = ProfileResolver(db_session)
+        self.task_inference = TaskInferenceService()
+        self.llm_policy = LLMPolicyService()
+        self.request_logger = RequestLogger(db_session)
+
+    def transform(self, payload: TransformPromptRequest) -> TransformPromptResponse:
+        persona = self.profile_resolver.resolve(payload.user_id, payload.summary_type)
+        task_type, task_rules = self.task_inference.infer(payload.raw_prompt)
+        policy = self.llm_policy.resolve(
+            provider=payload.target_llm.provider,
+            model=payload.target_llm.model,
+        )
+
+        transformed_prompt, persona_rules, model_rules = self._build_prompt(
+            raw_prompt=payload.raw_prompt,
+            task_type=task_type,
+            persona=persona.values,
+            model_policy=policy.policy,
+        )
+        rules_applied = task_rules + persona_rules + model_rules
+
+        metadata = TransformMetadata(
+            persona_source=persona.source,
+            rules_applied=rules_applied,
+            profile_version=persona.profile_version,
+            requested_model=policy.requested_model,
+            resolved_model=policy.resolved_model,
+            used_fallback_model=policy.used_fallback_model,
+        )
+
+        self.request_logger.log(
+            {
+                "session_id": payload.session_id,
+                "user_id": payload.user_id,
+                "raw_prompt": payload.raw_prompt,
+                "transformed_prompt": transformed_prompt,
+                "task_type": task_type,
+                "target_provider": payload.target_llm.provider,
+                "target_model": policy.resolved_model,
+                "persona_source": persona.source,
+                "used_fallback_model": policy.used_fallback_model,
+                "metadata_json": metadata.model_dump(),
+            }
+        )
+
+        return TransformPromptResponse(
+            session_id=payload.session_id,
+            user_id=payload.user_id,
+            transformed_prompt=transformed_prompt,
+            task_type=task_type,
+            metadata=metadata,
+        )
+
+    def _build_prompt(
+        self,
+        raw_prompt: str,
+        task_type: str,
+        persona: dict[str, float],
+        model_policy: dict,
+    ) -> tuple[str, list[str], list[str]]:
+        persona_rules = []
+        model_rules = []
+
+        lines = [TASK_INSTRUCTION_DEFAULTS[task_type]]
+
+        answer_first = persona["answer_first"] >= 0.65
+        if answer_first:
+            lines.append("Start with the direct answer before supporting detail.")
+            persona_rules.append("persona:answer_first:enabled")
+
+        structure = persona["structure"]
+        if structure >= 0.75:
+            lines.append("Use a clearly labeled structure with concise sections or bullets.")
+            persona_rules.append("persona:structure:high")
+        elif structure <= 0.35:
+            lines.append("Keep the structure lightweight and natural instead of rigid.")
+            persona_rules.append("persona:structure:low")
+
+        detail_level = persona["detail_level"]
+        if detail_level >= 0.8:
+            lines.append("Include substantive detail, examples, and explicit reasoning.")
+            persona_rules.append("persona:detail:high")
+        elif detail_level <= 0.35:
+            lines.append("Keep the response brief and focused on the essentials.")
+            persona_rules.append("persona:detail:low")
+
+        ambiguity = persona["ambiguity_reduction"]
+        if ambiguity >= 0.75:
+            lines.append("Reduce ambiguity by stating assumptions, constraints, and next actions explicitly.")
+            persona_rules.append("persona:ambiguity:high")
+
+        exploration = persona["exploration_level"]
+        if exploration >= 0.75:
+            lines.append("Offer multiple angles or options before converging on one path.")
+            persona_rules.append("persona:exploration:high")
+        elif exploration <= 0.3:
+            lines.append("Prefer one strong recommendation instead of many alternatives.")
+            persona_rules.append("persona:exploration:low")
+
+        context = persona["context_loading"]
+        if context >= 0.75:
+            lines.append("Load helpful context proactively when it improves the answer.")
+            persona_rules.append("persona:context:high")
+        elif context <= 0.3:
+            lines.append("Avoid extra background unless it is required to answer well.")
+            persona_rules.append("persona:context:low")
+
+        directness = persona["tone_directness"]
+        if directness >= 0.7:
+            lines.append("Use direct, confident phrasing.")
+            persona_rules.append("persona:tone:direct")
+        elif directness <= 0.35:
+            lines.append("Use a softer, more exploratory tone.")
+            persona_rules.append("persona:tone:gentle")
+
+        format_strictness = model_policy.get("format_strictness", "medium")
+        if format_strictness == "high":
+            lines.append("Follow formatting instructions exactly and keep output clean.")
+            model_rules.append("model:format:high")
+
+        if model_policy.get("stepwise") == "helpful" and task_type in {"planning", "analysis", "decision_support"}:
+            lines.append("Use stepwise reasoning in the visible response only when it improves clarity.")
+            model_rules.append("model:stepwise:helpful")
+
+        verbosity = model_policy.get("verbosity", "medium")
+        if verbosity == "low":
+            lines.append("Bias toward a compact response.")
+            model_rules.append("model:verbosity:low")
+        elif verbosity == "high":
+            lines.append("Bias toward a more expansive response.")
+            model_rules.append("model:verbosity:high")
+
+        lines.append("User request:")
+        lines.append(raw_prompt.strip())
+
+        return "\n".join(lines), persona_rules, model_rules

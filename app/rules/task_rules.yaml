@@ -1,0 +1,22 @@
+tasks:
+  summarization:
+    keywords: ["summarize", "summary", "recap", "tl;dr"]
+    phrases: ["short summary", "summarize this", "give me the summary"]
+  explanation:
+    keywords: ["explain", "clarify", "teach", "walk me through"]
+    phrases: ["explain simply", "help me understand"]
+  writing:
+    keywords: ["write", "rewrite", "draft", "compose"]
+    phrases: ["write this", "rewrite this", "draft a"]
+  planning:
+    keywords: ["plan", "roadmap", "steps", "timeline"]
+    phrases: ["create a plan", "step by step plan"]
+  analysis:
+    keywords: ["analyze", "analysis", "compare", "evaluate"]
+    phrases: ["analyze this", "compare these", "evaluate this"]
+  recommendation:
+    keywords: ["recommend", "suggest", "best option", "which should"]
+    phrases: ["what do you recommend", "which is best"]
+  decision_support:
+    keywords: ["decide", "decision", "tradeoff", "pros and cons"]
+    phrases: ["help me decide", "pros and cons"]

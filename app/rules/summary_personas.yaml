@@ -1,0 +1,82 @@
+generic_default:
+  structure: 0.5
+  answer_first: 0.5
+  tone_directness: 0.5
+  detail_level: 0.5
+  ambiguity_reduction: 0.5
+  exploration_level: 0.5
+  context_loading: 0.5
+
+summary_types:
+  "1":
+    structure: 0.9
+    answer_first: 0.95
+    tone_directness: 0.8
+    detail_level: 0.35
+    ambiguity_reduction: 0.8
+    exploration_level: 0.2
+    context_loading: 0.3
+  "2":
+    structure: 0.85
+    answer_first: 0.75
+    tone_directness: 0.7
+    detail_level: 0.55
+    ambiguity_reduction: 0.8
+    exploration_level: 0.3
+    context_loading: 0.4
+  "3":
+    structure: 0.75
+    answer_first: 0.7
+    tone_directness: 0.65
+    detail_level: 0.75
+    ambiguity_reduction: 0.85
+    exploration_level: 0.35
+    context_loading: 0.55
+  "4":
+    structure: 0.6
+    answer_first: 0.65
+    tone_directness: 0.5
+    detail_level: 0.8
+    ambiguity_reduction: 0.75
+    exploration_level: 0.45
+    context_loading: 0.7
+  "5":
+    structure: 0.45
+    answer_first: 0.4
+    tone_directness: 0.45
+    detail_level: 0.6
+    ambiguity_reduction: 0.55
+    exploration_level: 0.75
+    context_loading: 0.7
+  "6":
+    structure: 0.35
+    answer_first: 0.35
+    tone_directness: 0.4
+    detail_level: 0.45
+    ambiguity_reduction: 0.4
+    exploration_level: 0.9
+    context_loading: 0.8
+  "7":
+    structure: 0.7
+    answer_first: 0.8
+    tone_directness: 0.85
+    detail_level: 0.5
+    ambiguity_reduction: 0.9
+    exploration_level: 0.2
+    context_loading: 0.45
+  "8":
+    structure: 0.55
+    answer_first: 0.55
+    tone_directness: 0.35
+    detail_level: 0.85
+    ambiguity_reduction: 0.65
+    exploration_level: 0.55
+    context_loading: 0.8
+  "9":
+    structure: 0.25
+    answer_first: 0.25
+    tone_directness: 0.3
+    detail_level: 0.3
+    ambiguity_reduction: 0.35
+    exploration_level: 0.85
+    context_loading: 0.35
