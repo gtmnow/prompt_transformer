@@ -9,6 +9,9 @@ Required in most deployments:
 - `LOG_LEVEL`
 - `PORT`
 - `ENABLE_REQUEST_LOGGING`
+- `REQUIRE_SERVICE_AUTH`
+- `PROMPT_TRANSFORMER_API_KEY`
+- `ALLOWED_CLIENT_IDS`
 
 Startup/deployment helpers:
 
@@ -35,12 +38,15 @@ Startup/deployment helpers:
 ## First Railway deploy checklist
 
 1. Set `DATABASE_URL` on the app service
-2. Set `RAILWAY_AUTO_MIGRATE=true`
-3. Set `RAILWAY_SEED_ON_START=true`
-4. Deploy
-5. Verify `GET /api/health`
-6. Verify `POST /api/transform_prompt`
-7. Set `RAILWAY_SEED_ON_START=false`
+2. Set `REQUIRE_SERVICE_AUTH=true`
+3. Set `PROMPT_TRANSFORMER_API_KEY=<shared service credential>`
+4. Set `ALLOWED_CLIENT_IDS=hermanprompt`
+5. Set `RAILWAY_AUTO_MIGRATE=true`
+6. Set `RAILWAY_SEED_ON_START=true`
+7. Deploy
+8. Verify `GET /api/health`
+9. Verify authenticated `POST /api/transform_prompt`
+10. Set `RAILWAY_SEED_ON_START=false`
 
 ## Smoke tests
 
@@ -55,6 +61,8 @@ curl https://<service-domain>/api/health
 ```bash
 curl -X POST "https://<service-domain>/api/transform_prompt" \
   -H "Content-Type: application/json" \
+  -H "X-Client-Id: hermanprompt" \
+  -H "Authorization: Bearer <PROMPT_TRANSFORMER_API_KEY>" \
   -d '{
     "session_id": "sess_123",
     "user_id": "user_1",
@@ -114,6 +122,14 @@ Check:
 - `DATABASE_URL`
 - Postgres service availability
 - migration logs in Railway runtime output
+
+### `401` or `403` from `POST /api/transform_prompt`
+
+Check:
+
+- `REQUIRE_SERVICE_AUTH=true`
+- `PROMPT_TRANSFORMER_API_KEY` matches HermanPrompt backend `PROMPT_TRANSFORMER_API_KEY`
+- `ALLOWED_CLIENT_IDS` includes `hermanprompt`
 
 ## Data notes
 
