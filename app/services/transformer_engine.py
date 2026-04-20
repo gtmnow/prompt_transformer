@@ -17,7 +17,7 @@ from app.services.request_logger import RequestLogger
 from app.services.task_inference import TaskInferenceService
 
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("uvicorn.error")
 
 TASK_INSTRUCTION_DEFAULTS = {
     "summarization": "Summarize the content according to the guidance below.",
