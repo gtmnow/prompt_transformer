@@ -1,7 +1,11 @@
 from __future__ import annotations
 
+import logging
+import time
+
 from sqlalchemy.orm import Session
 
+from app.core.config import get_settings
 from app.schemas.transform import TransformMetadata, TransformPromptRequest, TransformPromptResponse
 from app.services.compliance_checks import ComplianceCheckService
 from app.services.llm_policy import LLMPolicyService
@@ -12,6 +16,8 @@ from app.services.prompt_scoring import PromptScoringService
 from app.services.request_logger import RequestLogger
 from app.services.task_inference import TaskInferenceService
 
+
+logger = logging.getLogger(__name__)
 
 TASK_INSTRUCTION_DEFAULTS = {
     "summarization": "Summarize the content according to the guidance below.",
@@ -28,6 +34,7 @@ TASK_INSTRUCTION_DEFAULTS = {
 class TransformerEngine:
     def __init__(self, db_session: Session):
         self.db_session = db_session
+        self.settings = get_settings()
         self.profile_resolver = ProfileResolver(db_session)
         self.task_inference = TaskInferenceService()
         self.llm_policy = LLMPolicyService()
@@ -38,118 +45,180 @@ class TransformerEngine:
         self.request_logger = RequestLogger(db_session)
 
     def transform(self, payload: TransformPromptRequest) -> TransformPromptResponse:
-        persona = self.profile_resolver.resolve(payload.user_id, payload.summary_type)
-        effective_enforcement_level = payload.enforcement_level or persona.prompt_enforcement_level
-        task_type, task_rules = self.task_inference.infer(payload.raw_prompt)
-        policy = self.llm_policy.resolve(
-            provider=payload.target_llm.provider,
-            model=payload.target_llm.model,
-        )
-        conversation, enforcement_rules, coaching_tip, requirement_trace = self.prompt_requirements.evaluate(
-            conversation_id=payload.conversation_id,
-            raw_prompt=payload.raw_prompt,
-            conversation=payload.conversation,
-            enforcement_level=effective_enforcement_level,
-        )
+        started_at = time.perf_counter()
+        timings_ms: dict[str, float] = {}
+        task_type = "unknown"
+        result_type = "error"
+        persona_source = "unknown"
 
-        findings = []
-        if persona.compliance_check_enabled:
-            findings.extend(self.compliance_checks.evaluate(payload.raw_prompt))
-            enforcement_rules.append("check:compliance:enabled")
-        if persona.pii_check_enabled:
-            findings.extend(self.pii_checks.evaluate(payload.raw_prompt))
-            enforcement_rules.append("check:pii:enabled")
-        if payload.enforcement_level is not None:
-            enforcement_rules.append("policy:enforcement:override")
+        try:
+            step_started_at = time.perf_counter()
+            persona = self.profile_resolver.resolve(payload.user_id, payload.summary_type)
+            timings_ms["profile_resolve"] = (time.perf_counter() - step_started_at) * 1000
+            persona_source = persona.source
 
-        blocking_findings = [finding for finding in findings if finding.severity == "high"]
-        transformed_prompt = None
-        result_type = "transformed"
-        blocking_message = None
+            effective_enforcement_level = payload.enforcement_level or persona.prompt_enforcement_level
 
-        if blocking_findings:
-            result_type = "blocked"
-            conversation.enforcement.status = "blocked"
-            blocking_message = blocking_findings[0].message
-            persona_rules = []
-            model_rules = []
-        elif conversation.enforcement.status == "needs_coaching":
-            result_type = "coaching"
-            persona_rules = []
-            model_rules = []
-        else:
-            transformed_prompt, persona_rules, model_rules = self._build_prompt(
+            step_started_at = time.perf_counter()
+            task_type, task_rules = self.task_inference.infer(payload.raw_prompt)
+            timings_ms["task_inference"] = (time.perf_counter() - step_started_at) * 1000
+
+            step_started_at = time.perf_counter()
+            policy = self.llm_policy.resolve(
+                provider=payload.target_llm.provider,
+                model=payload.target_llm.model,
+            )
+            timings_ms["policy_resolve"] = (time.perf_counter() - step_started_at) * 1000
+
+            step_started_at = time.perf_counter()
+            conversation, enforcement_rules, coaching_tip, requirement_trace = self.prompt_requirements.evaluate(
+                conversation_id=payload.conversation_id,
                 raw_prompt=payload.raw_prompt,
-                task_type=task_type,
-                persona=persona.values,
-                model_policy=policy.policy,
+                conversation=payload.conversation,
+                enforcement_level=effective_enforcement_level,
+            )
+            timings_ms["requirements_eval"] = (time.perf_counter() - step_started_at) * 1000
+
+            step_started_at = time.perf_counter()
+            findings = []
+            if persona.compliance_check_enabled:
+                findings.extend(self.compliance_checks.evaluate(payload.raw_prompt))
+                enforcement_rules.append("check:compliance:enabled")
+            if persona.pii_check_enabled:
+                findings.extend(self.pii_checks.evaluate(payload.raw_prompt))
+                enforcement_rules.append("check:pii:enabled")
+            if payload.enforcement_level is not None:
+                enforcement_rules.append("policy:enforcement:override")
+            timings_ms["findings_eval"] = (time.perf_counter() - step_started_at) * 1000
+
+            blocking_findings = [finding for finding in findings if finding.severity == "high"]
+            transformed_prompt = None
+            result_type = "transformed"
+            blocking_message = None
+
+            step_started_at = time.perf_counter()
+            if blocking_findings:
+                result_type = "blocked"
+                conversation.enforcement.status = "blocked"
+                blocking_message = blocking_findings[0].message
+                persona_rules = []
+                model_rules = []
+            elif conversation.enforcement.status == "needs_coaching":
+                result_type = "coaching"
+                persona_rules = []
+                model_rules = []
+            else:
+                transformed_prompt, persona_rules, model_rules = self._build_prompt(
+                    raw_prompt=payload.raw_prompt,
+                    task_type=task_type,
+                    persona=persona.values,
+                    model_policy=policy.policy,
+                )
+            timings_ms["prompt_build"] = (time.perf_counter() - step_started_at) * 1000
+
+            rules_applied = task_rules + enforcement_rules + persona_rules + model_rules
+
+            metadata = TransformMetadata(
+                persona_source=persona.source,
+                rules_applied=rules_applied,
+                profile_version=persona.profile_version,
+                requested_model=policy.requested_model,
+                resolved_model=policy.resolved_model,
+                used_fallback_model=policy.used_fallback_model,
             )
 
-        rules_applied = task_rules + enforcement_rules + persona_rules + model_rules
+            step_started_at = time.perf_counter()
+            score_result = self.prompt_scoring.calculate(
+                conversation=conversation,
+                result_type=result_type,
+                requirement_trace=requirement_trace,
+            )
+            score_row = self.prompt_scoring.upsert_conversation_score(
+                conversation=conversation,
+                user_id_hash=payload.user_id,
+                task_type=task_type,
+                result_type=result_type,
+                score_result=score_result,
+            )
+            score_summary = self.prompt_scoring.attach_rollup_scores(
+                score_result=score_result,
+                score_row=score_row,
+            )
+            timings_ms["scoring_persist"] = (time.perf_counter() - step_started_at) * 1000
 
-        metadata = TransformMetadata(
-            persona_source=persona.source,
-            rules_applied=rules_applied,
-            profile_version=persona.profile_version,
-            requested_model=policy.requested_model,
-            resolved_model=policy.resolved_model,
-            used_fallback_model=policy.used_fallback_model,
-        )
+            step_started_at = time.perf_counter()
+            self.request_logger.log(
+                {
+                    "session_id": payload.session_id,
+                    "conversation_id": payload.conversation_id,
+                    "user_id": payload.user_id,
+                    "raw_prompt": payload.raw_prompt,
+                    "transformed_prompt": transformed_prompt,
+                    "task_type": task_type,
+                    "result_type": result_type,
+                    "coaching_tip": coaching_tip,
+                    "blocking_message": blocking_message,
+                    "target_provider": payload.target_llm.provider,
+                    "target_model": policy.resolved_model,
+                    "persona_source": persona.source,
+                    "used_fallback_model": policy.used_fallback_model,
+                    "enforcement_level": effective_enforcement_level,
+                    "compliance_check_enabled": persona.compliance_check_enabled,
+                    "pii_check_enabled": persona.pii_check_enabled,
+                    "conversation_json": conversation.model_dump(),
+                    "findings_json": [finding.model_dump() for finding in findings],
+                    "metadata_json": metadata.model_dump(),
+                }
+            )
+            timings_ms["request_log"] = (time.perf_counter() - step_started_at) * 1000
 
-        score_result = self.prompt_scoring.calculate(
-            conversation=conversation,
-            result_type=result_type,
-            requirement_trace=requirement_trace,
-        )
-        score_row = self.prompt_scoring.upsert_conversation_score(
-            conversation=conversation,
-            user_id_hash=payload.user_id,
-            task_type=task_type,
-            result_type=result_type,
-            score_result=score_result,
-        )
-        score_summary = self.prompt_scoring.attach_rollup_scores(
-            score_result=score_result,
-            score_row=score_row,
-        )
+            return TransformPromptResponse(
+                session_id=payload.session_id,
+                conversation_id=payload.conversation_id,
+                user_id=payload.user_id,
+                result_type=result_type,
+                task_type=task_type,
+                transformed_prompt=transformed_prompt,
+                coaching_tip=coaching_tip,
+                blocking_message=blocking_message,
+                conversation=conversation,
+                findings=findings,
+                scoring=score_summary.as_summary(),
+                metadata=metadata,
+            )
+        finally:
+            self._emit_timing_log(
+                payload=payload,
+                task_type=task_type,
+                result_type=result_type,
+                persona_source=persona_source,
+                timings_ms=timings_ms,
+                total_ms=(time.perf_counter() - started_at) * 1000,
+            )
 
-        self.request_logger.log(
-            {
-                "session_id": payload.session_id,
-                "conversation_id": payload.conversation_id,
-                "user_id": payload.user_id,
-                "raw_prompt": payload.raw_prompt,
-                "transformed_prompt": transformed_prompt,
-                "task_type": task_type,
-                "result_type": result_type,
-                "coaching_tip": coaching_tip,
-                "blocking_message": blocking_message,
-                "target_provider": payload.target_llm.provider,
-                "target_model": policy.resolved_model,
-                "persona_source": persona.source,
-                "used_fallback_model": policy.used_fallback_model,
-                "enforcement_level": effective_enforcement_level,
-                "compliance_check_enabled": persona.compliance_check_enabled,
-                "pii_check_enabled": persona.pii_check_enabled,
-                "conversation_json": conversation.model_dump(),
-                "findings_json": [finding.model_dump() for finding in findings],
-                "metadata_json": metadata.model_dump(),
-            }
-        )
+    def _emit_timing_log(
+        self,
+        payload: TransformPromptRequest,
+        task_type: str,
+        result_type: str,
+        persona_source: str,
+        timings_ms: dict[str, float],
+        total_ms: float,
+    ) -> None:
+        if not self.settings.enable_transform_timing_logs:
+            return
 
-        return TransformPromptResponse(
-            session_id=payload.session_id,
-            conversation_id=payload.conversation_id,
-            user_id=payload.user_id,
-            result_type=result_type,
-            task_type=task_type,
-            transformed_prompt=transformed_prompt,
-            coaching_tip=coaching_tip,
-            blocking_message=blocking_message,
-            conversation=conversation,
-            findings=findings,
-            scoring=score_summary.as_summary(),
-            metadata=metadata,
+        timing_parts = [f"{name}_ms={value:.1f}" for name, value in timings_ms.items()]
+        logger.info(
+            "transform_timing session_id=%s conversation_id=%s user_id=%s task_type=%s result_type=%s persona_source=%s total_ms=%.1f %s",
+            payload.session_id,
+            payload.conversation_id,
+            payload.user_id,
+            task_type,
+            result_type,
+            persona_source,
+            total_ms,
+            " ".join(timing_parts),
         )
 
     def _build_prompt(

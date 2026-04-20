@@ -10,6 +10,7 @@ class Settings(BaseSettings):
     log_level: str = "INFO"
     port: int = 8000
     enable_request_logging: bool = False
+    enable_transform_timing_logs: bool = True
     railway_auto_migrate: bool = True
     railway_seed_on_start: bool = False
     host: str = "0.0.0.0"
