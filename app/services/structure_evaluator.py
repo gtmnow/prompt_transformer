@@ -115,6 +115,26 @@ class StructureEvaluationService:
                 response.status_code,
                 sorted(parsed.keys()),
             )
+            field_diagnostics = {}
+            for field_name in ("who", "task", "context", "output"):
+                field_payload = parsed.get(field_name)
+                if isinstance(field_payload, dict):
+                    field_diagnostics[field_name] = {
+                        "keys": sorted(field_payload.keys()),
+                        "has_score": isinstance(field_payload.get("score"), (int, float))
+                        and not isinstance(field_payload.get("score"), bool),
+                        "status": field_payload.get("status"),
+                    }
+                else:
+                    field_diagnostics[field_name] = {
+                        "keys": None,
+                        "has_score": False,
+                        "status": None,
+                    }
+            logger.info(
+                "structure_evaluator_field_diagnostics %s",
+                field_diagnostics,
+            )
             return parsed
         except httpx.HTTPStatusError as exc:
             logger.warning(
