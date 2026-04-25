@@ -310,6 +310,20 @@ def test_transform_accepts_unlabeled_natural_language_prompt_under_moderate_enfo
     assert body["conversation"]["requirements"]["task"]["status"] == "present"
     assert body["conversation"]["requirements"]["context"]["status"] == "present"
     assert body["conversation"]["requirements"]["output"]["status"] == "present"
+    for field_name in ("who", "task", "context", "output"):
+        requirement = body["conversation"]["requirements"][field_name]
+        assert set(requirement.keys()) >= {
+            "value",
+            "status",
+            "heuristic_score",
+            "llm_score",
+            "max_score",
+            "reason",
+            "improvement_hint",
+        }
+        assert requirement["heuristic_score"] is not None
+        assert requirement["max_score"] == 25
+        assert requirement["reason"]
 
 
 def test_transform_allows_derived_fields_under_moderate_enforcement_with_coaching(client) -> None:
@@ -677,6 +691,11 @@ def test_get_conversation_score_returns_rollup_from_database(client) -> None:
     assert body["structural_score"] == 30
     assert body["best_score"] == 30
     assert body["improvement_score"] == 0
+    assert body["conversation"]["conversation_id"] == "conv_score_fetch"
+    assert body["conversation"]["requirements"]["task"]["heuristic_score"] == 25
+    assert body["conversation"]["requirements"]["task"]["max_score"] == 25
+    assert body["conversation"]["requirements"]["task"]["reason"]
+    assert body["conversation"]["requirements"]["who"]["improvement_hint"] is not None
 
 
 def test_score_rollup_persists_hybrid_score_details(client) -> None:
@@ -713,6 +732,15 @@ def test_score_rollup_persists_hybrid_score_details(client) -> None:
         assert score_row.score_details_json["scoring_method"] in {"heuristic_only_v1", "hybrid_llm_v2"}
         assert "heuristic_field_statuses" in score_row.score_details_json
         assert "llm_field_statuses" in score_row.score_details_json
+        assert set(score_row.score_details_json["requirements"]["task"].keys()) >= {
+            "value",
+            "status",
+            "heuristic_score",
+            "llm_score",
+            "max_score",
+            "reason",
+            "improvement_hint",
+        }
         assert score_row.final_llm_score == score_row.score_details_json["llm_score"]
     finally:
         db.close()

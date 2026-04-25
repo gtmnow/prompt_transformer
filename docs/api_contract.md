@@ -34,6 +34,15 @@ Request body:
 }
 ```
 
+Optional request fields:
+
+- `conversation`
+  - prior transformer-owned conversation state for the same `conversation_id`
+- `summary_type`
+  - optional persona override in the range `1..9`
+- `enforcement_level`
+  - optional enforcement override: `none`, `low`, `moderate`, or `full`
+
 ## Field meanings
 
 - `session_id`
@@ -49,9 +58,51 @@ Request body:
 - `target_llm.model`
   - requested model name used for local policy lookup
 - `conversation`
-  - optional shared conversation object for conversation-level enforcement work
+  - optional prior transformer conversation state for the same thread
 - `summary_type`
   - optional override in the range `1..9`
+- `enforcement_level`
+  - optional override for prompt-structure enforcement
+
+## Conversation requirement contract
+
+Every field under `conversation.requirements` uses this shape:
+
+```json
+{
+  "value": "You are an experienced recruiter...",
+  "status": "present",
+  "heuristic_score": 25,
+  "llm_score": 22,
+  "max_score": 25,
+  "reason": "Role is specific and audience-appropriate.",
+  "improvement_hint": null
+}
+```
+
+Fields always returned by Prompt Transformer:
+
+- `who`
+- `task`
+- `context`
+- `output`
+
+Field meanings:
+
+- `value`
+  - the best transformer-owned value for that section
+- `status`
+  - fused section status used by downstream clients
+- `heuristic_score`
+  - deterministic section score from transformer heuristics
+- `llm_score`
+  - semantic section score from the internal evaluator when available, otherwise `null`
+- `max_score`
+  - section maximum, currently `25`
+- `reason`
+  - transformer-owned explanation of the current section quality
+- `improvement_hint`
+  - short transformer-owned suggestion for improving that section, or `null`
 
 ## Successful response
 
@@ -63,7 +114,61 @@ Request body:
   "result_type": "transformed",
   "transformed_prompt": "Explain the topic according to the guidance below.\n...",
   "task_type": "explanation",
-  "conversation": null,
+  "conversation": {
+    "conversation_id": "conv_123",
+    "requirements": {
+      "who": {
+        "value": "You are an experienced recruiter...",
+        "status": "present",
+        "heuristic_score": 25,
+        "llm_score": 22,
+        "max_score": 25,
+        "reason": "Role is specific and audience-appropriate.",
+        "improvement_hint": null
+      },
+      "task": {
+        "value": "Create an action plan to reduce unqualified applicants.",
+        "status": "derived",
+        "heuristic_score": 14,
+        "llm_score": 12,
+        "max_score": 25,
+        "reason": "Task is present but too broad.",
+        "improvement_hint": "State the exact outcome and decision criteria."
+      },
+      "context": {
+        "value": "This is for an executive hiring review...",
+        "status": "present",
+        "heuristic_score": 25,
+        "llm_score": 24,
+        "max_score": 25,
+        "reason": "Context is clear.",
+        "improvement_hint": null
+      },
+      "output": {
+        "value": "Respond with a summary and bullet points.",
+        "status": "present",
+        "heuristic_score": 20,
+        "llm_score": 18,
+        "max_score": 25,
+        "reason": "Output is defined but not precise enough.",
+        "improvement_hint": "Add exact structure and length."
+      }
+    },
+    "enforcement": {
+      "level": "moderate",
+      "status": "passes",
+      "missing_fields": [],
+      "last_evaluated_at": "2026-04-25T12:00:00+00:00"
+    }
+  },
+  "scoring": {
+    "scoring_version": "v4",
+    "initial_score": 62,
+    "final_score": 81,
+    "initial_llm_score": 58,
+    "final_llm_score": 76,
+    "structural_score": 81
+  },
   "findings": [],
   "metadata": {
     "persona_source": "db_profile",
@@ -103,17 +208,70 @@ Response body:
 {
   "conversation_id": "conv_123",
   "user_id": "user_1",
-  "scoring_version": "v2",
-  "initial_score": 40,
-  "best_score": 100,
-  "final_score": 100,
-  "improvement_score": 60,
-  "best_improvement_score": 60,
-  "last_scored_at": "2026-04-18T15:20:00+00:00"
+  "scoring_version": "v4",
+  "initial_score": 62,
+  "best_score": 81,
+  "final_score": 81,
+  "initial_llm_score": 58,
+  "best_llm_score": 76,
+  "final_llm_score": 76,
+  "structural_score": 81,
+  "improvement_score": 19,
+  "best_improvement_score": 19,
+  "last_scored_at": "2026-04-25T12:00:00+00:00",
+  "conversation": {
+    "conversation_id": "conv_123",
+    "requirements": {
+      "who": {
+        "value": "You are an experienced recruiter...",
+        "status": "present",
+        "heuristic_score": 25,
+        "llm_score": 22,
+        "max_score": 25,
+        "reason": "Role is specific and audience-appropriate.",
+        "improvement_hint": null
+      },
+      "task": {
+        "value": "Create an action plan to reduce unqualified applicants.",
+        "status": "derived",
+        "heuristic_score": 14,
+        "llm_score": 12,
+        "max_score": 25,
+        "reason": "Task is present but too broad.",
+        "improvement_hint": "State the exact outcome and decision criteria."
+      },
+      "context": {
+        "value": "This is for an executive hiring review...",
+        "status": "present",
+        "heuristic_score": 25,
+        "llm_score": 24,
+        "max_score": 25,
+        "reason": "Context is clear.",
+        "improvement_hint": null
+      },
+      "output": {
+        "value": "Respond with a summary and bullet points.",
+        "status": "present",
+        "heuristic_score": 20,
+        "llm_score": 18,
+        "max_score": 25,
+        "reason": "Output is defined but not precise enough.",
+        "improvement_hint": "Add exact structure and length."
+      }
+    },
+    "enforcement": {
+      "level": "moderate",
+      "status": "passes",
+      "missing_fields": [],
+      "last_evaluated_at": "2026-04-25T12:00:00+00:00"
+    }
+  }
 }
 ```
 
 This endpoint is the preferred read path for UI scoring displays.
+
+Downstream clients should treat this endpoint as the reload path for previously persisted field-level prompt scoring data.
 
 Conversation requirement statuses use:
 
@@ -167,3 +325,6 @@ Meaning:
 - The service is deterministic and side-effect free unless request logging is enabled.
 - Callers should branch on `result_type` and only forward `transformed_prompt` to the target LLM when `result_type == "transformed"`.
 - Callers should not depend on the exact wording of `transformed_prompt`, `coaching_tip`, or `blocking_message`; they should depend on the contract fields and general deterministic behavior.
+- Prompt Transformer is the source of truth for both conversation-level scores and field-level requirement scoring.
+- Downstream clients should not recompute `who`, `task`, `context`, or `output` scores locally.
+- Downstream clients should render and route from `conversation.requirements.<field>` and the top-level `scoring` object returned by Prompt Transformer.

@@ -13,7 +13,7 @@ from app.core.config import get_settings
 from app.db.session import SessionLocal
 from app.core.rules import get_rule_registry
 from app.models.prompt_score import ConversationPromptScore
-from app.schemas.transform import ConversationState, PromptScoringSummary
+from app.schemas.transform import ConversationRequirement, ConversationState, PromptScoringSummary
 from app.services.prompt_requirements import RequirementEvaluationTrace
 
 
@@ -27,6 +27,7 @@ class PromptScoreResult:
     structural_score: int
     field_statuses: dict[str, str]
     field_points: dict[str, int]
+    scored_requirements: dict[str, ConversationRequirement]
     heuristic_score: int
     llm_score: Optional[int]
     llm_dimension_scores: dict[str, int] | None
@@ -120,6 +121,10 @@ class PromptScoringService:
             field_name: self.status_points.get(status, 0)
             for field_name, status in field_statuses.items()
         }
+        scored_requirements = self._build_scored_requirements(
+            conversation=conversation,
+            requirement_trace=requirement_trace,
+        )
         heuristic_score = sum(heuristic_field_points.values())
         llm_score = sum(llm_field_points.values()) if llm_field_points is not None else None
         fused_field_score = sum(field_points.values())
@@ -143,6 +148,10 @@ class PromptScoringService:
             "result_type": result_type,
             "calculated_at": datetime.now(timezone.utc).isoformat(),
             "scoring_version": self.scoring_version,
+            "requirements": {
+                field_name: requirement.model_dump()
+                for field_name, requirement in scored_requirements.items()
+            },
             "heuristic_score": heuristic_score,
             "llm_score": llm_score,
             "fused_field_score": fused_field_score,
@@ -163,6 +172,7 @@ class PromptScoringService:
             structural_score=structural_score,
             field_statuses=field_statuses,
             field_points=field_points,
+            scored_requirements=scored_requirements,
             heuristic_score=heuristic_score,
             llm_score=llm_score,
             llm_dimension_scores=llm_field_points,
@@ -392,9 +402,123 @@ class PromptScoringService:
             structural_score=score_result.structural_score,
             field_statuses=score_result.field_statuses,
             field_points=score_result.field_points,
+            scored_requirements=score_result.scored_requirements,
             heuristic_score=score_result.heuristic_score,
             llm_score=score_result.llm_score,
             llm_dimension_scores=score_result.llm_dimension_scores,
             scoring_method=score_result.scoring_method,
             score_details=score_result.score_details,
+        )
+
+    def enrich_conversation(
+        self,
+        *,
+        conversation: ConversationState,
+        score_result: PromptScoreResult,
+    ) -> ConversationState:
+        return conversation.model_copy(
+            update={
+                "requirements": {
+                    field_name: requirement.model_copy()
+                    for field_name, requirement in score_result.scored_requirements.items()
+                }
+            }
+        )
+
+    def _build_scored_requirements(
+        self,
+        *,
+        conversation: ConversationState,
+        requirement_trace: RequirementEvaluationTrace,
+    ) -> dict[str, ConversationRequirement]:
+        scored_requirements: dict[str, ConversationRequirement] = {}
+        for field_name, max_score in self.field_weights.items():
+            requirement = conversation.requirements[field_name]
+            heuristic_score = self.status_points.get(requirement.status, 0)
+            current_requirement = requirement_trace.current[field_name]
+            evaluator_requirement = requirement_trace.evaluator[field_name]
+            carried_forward = (
+                requirement.status != current_requirement.status
+                or requirement.value != current_requirement.value
+            ) and requirement_trace.evaluator_used and (
+                requirement.status != evaluator_requirement.status
+                or requirement.value != evaluator_requirement.value
+            )
+            llm_score = requirement_trace.evaluator_scores.get(field_name) if requirement_trace.evaluator_scores else None
+            if carried_forward:
+                llm_score = heuristic_score
+            reason, improvement_hint = self._describe_requirement(
+                field_name=field_name,
+                requirement=requirement,
+                max_score=max_score,
+                llm_score=llm_score,
+                carried_forward=carried_forward,
+            )
+            scored_requirements[field_name] = ConversationRequirement(
+                value=requirement.value,
+                status=requirement.status,
+                heuristic_score=heuristic_score,
+                llm_score=llm_score,
+                max_score=max_score,
+                reason=reason,
+                improvement_hint=improvement_hint,
+            )
+        return scored_requirements
+
+    def _describe_requirement(
+        self,
+        *,
+        field_name: str,
+        requirement: ConversationRequirement,
+        max_score: int,
+        llm_score: int | None,
+        carried_forward: bool,
+    ) -> tuple[str, str | None]:
+        field_labels = {
+            "who": "role",
+            "task": "task",
+            "context": "context",
+            "output": "output format",
+        }
+        improvement_hints = {
+            "who": "State the exact role, perspective, or audience the AI should serve.",
+            "task": "State the exact outcome and decision criteria.",
+            "context": "Add the situation, constraints, or why this answer will be used.",
+            "output": "Add the exact structure, format, and length you want back.",
+        }
+        label = field_labels[field_name]
+
+        if carried_forward:
+            return (
+                f"{label.capitalize()} is available from earlier conversation state.",
+                None,
+            )
+        if requirement.status == "missing":
+            return (
+                f"{label.capitalize()} is missing.",
+                improvement_hints[field_name],
+            )
+        if requirement.status == "derived":
+            return (
+                f"{label.capitalize()} can be inferred, but it is not stated explicitly.",
+                improvement_hints[field_name],
+            )
+        if llm_score is None:
+            return (
+                f"{label.capitalize()} is explicitly present.",
+                None,
+            )
+        if llm_score >= max_score:
+            return (
+                f"{label.capitalize()} is clear and specific.",
+                None,
+            )
+        if llm_score >= max(1, int(round(max_score * 0.7))):
+            return (
+                f"{label.capitalize()} is present but could be more specific.",
+                improvement_hints[field_name],
+            )
+        return (
+            f"{label.capitalize()} is present but still too vague.",
+            improvement_hints[field_name],
         )

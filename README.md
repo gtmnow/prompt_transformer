@@ -147,7 +147,55 @@ Example successful response:
   "result_type": "transformed",
   "transformed_prompt": "Explain the topic according to the guidance below.\nStart with the direct answer before supporting detail.\n...",
   "task_type": "explanation",
-  "conversation": null,
+  "conversation": {
+    "conversation_id": "conv_123",
+    "requirements": {
+      "who": {
+        "value": "You are an experienced recruiter...",
+        "status": "present",
+        "heuristic_score": 25,
+        "llm_score": 22,
+        "max_score": 25,
+        "reason": "Role is specific and audience-appropriate.",
+        "improvement_hint": null
+      },
+      "task": {
+        "value": "Create an action plan to reduce unqualified applicants.",
+        "status": "derived",
+        "heuristic_score": 14,
+        "llm_score": 12,
+        "max_score": 25,
+        "reason": "Task is present but too broad.",
+        "improvement_hint": "State the exact outcome and decision criteria."
+      },
+      "context": {
+        "value": "This is for an executive hiring review...",
+        "status": "present",
+        "heuristic_score": 25,
+        "llm_score": 24,
+        "max_score": 25,
+        "reason": "Context is clear.",
+        "improvement_hint": null
+      },
+      "output": {
+        "value": "Respond with a summary and bullet points.",
+        "status": "present",
+        "heuristic_score": 20,
+        "llm_score": 18,
+        "max_score": 25,
+        "reason": "Output is defined but not precise enough.",
+        "improvement_hint": "Add exact structure and length."
+      }
+    }
+  },
+  "scoring": {
+    "scoring_version": "v4",
+    "initial_score": 62,
+    "final_score": 81,
+    "initial_llm_score": 58,
+    "final_llm_score": 76,
+    "structural_score": 81
+  },
   "findings": [],
   "metadata": {
     "persona_source": "db_profile",
@@ -163,6 +211,25 @@ Example successful response:
 ```
 
 See [docs/api_contract.md](./docs/api_contract.md) for request/response rules and expected behaviors.
+
+Prompt Transformer now owns the field-level scoring contract used by downstream clients. Consumers should read:
+
+- `conversation.requirements.who`
+- `conversation.requirements.task`
+- `conversation.requirements.context`
+- `conversation.requirements.output`
+
+Each requirement object includes:
+
+- `value`
+- `status`
+- `heuristic_score`
+- `llm_score`
+- `max_score`
+- `reason`
+- `improvement_hint`
+
+Reloads should use `GET /api/conversation_scores/{conversation_id}?user_id=<user_id>`, which returns the persisted scoring rollups plus the same `conversation.requirements` field objects.
 
 Planned feature work for conversation-level prompt enforcement, compliance checks, and PII checks is documented in [docs/prompt_enforcement_implementation_spec.md](./docs/prompt_enforcement_implementation_spec.md).
 

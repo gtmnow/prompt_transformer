@@ -140,6 +140,10 @@ class TransformerEngine:
                 result_type=result_type,
                 score_result=score_result,
             )
+            conversation = self.prompt_scoring.enrich_conversation(
+                conversation=conversation,
+                score_result=score_result,
+            )
             timings_ms["scoring_dispatch"] = (time.perf_counter() - step_started_at) * 1000
 
             step_started_at = time.perf_counter()

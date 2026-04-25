@@ -19,6 +19,11 @@ FindingSeverity = Literal["low", "medium", "high"]
 class ConversationRequirement(BaseModel):
     value: Optional[str] = Field(default=None)
     status: RequirementStatus
+    heuristic_score: Optional[int] = Field(default=None, ge=0, le=100)
+    llm_score: Optional[int] = Field(default=None, ge=0, le=100)
+    max_score: Optional[int] = Field(default=None, ge=0, le=100)
+    reason: Optional[str] = Field(default=None)
+    improvement_hint: Optional[str] = Field(default=None)
 
     @field_validator("status")
     @classmethod
@@ -71,6 +76,7 @@ class ConversationScoreResponse(BaseModel):
     improvement_score: int
     best_improvement_score: int
     last_scored_at: str
+    conversation: Optional[ConversationState] = None
 
 
 class TransformPromptRequest(BaseModel):
