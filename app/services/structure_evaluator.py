@@ -7,14 +7,16 @@ from typing import Any, Optional
 import httpx
 
 from app.core.config import get_settings
+from app.core.logging import configure_application_logging
 
 
-logger = logging.getLogger("uvicorn.error")
+logger = logging.getLogger("prompt_transformer.structure_evaluator")
 
 
 class StructureEvaluationService:
     def __init__(self) -> None:
         self.settings = get_settings()
+        configure_application_logging(self.settings.log_level)
 
     def is_enabled(self) -> bool:
         return bool(

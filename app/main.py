@@ -8,6 +8,7 @@ from fastapi.responses import JSONResponse
 
 from app.api.routes import router as api_router
 from app.core.config import get_settings
+from app.core.logging import configure_application_logging
 from app.core.rules import get_rule_registry
 
 
@@ -19,6 +20,7 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
 
 def create_app() -> FastAPI:
     settings = get_settings()
+    configure_application_logging(settings.log_level)
     app = FastAPI(
         title="Prompt Transformer",
         version="0.1.0",

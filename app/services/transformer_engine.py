@@ -6,6 +6,7 @@ import time
 from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
+from app.core.logging import configure_application_logging
 from app.schemas.transform import TransformMetadata, TransformPromptRequest, TransformPromptResponse
 from app.services.compliance_checks import ComplianceCheckService
 from app.services.llm_policy import LLMPolicyService
@@ -17,7 +18,7 @@ from app.services.request_logger import RequestLogger
 from app.services.task_inference import TaskInferenceService
 
 
-logger = logging.getLogger("uvicorn.error")
+logger = logging.getLogger("prompt_transformer.transformer_engine")
 
 TASK_INSTRUCTION_DEFAULTS = {
     "summarization": "Summarize the content according to the guidance below.",
@@ -35,6 +36,7 @@ class TransformerEngine:
     def __init__(self, db_session: Session):
         self.db_session = db_session
         self.settings = get_settings()
+        configure_application_logging(self.settings.log_level)
         self.profile_resolver = ProfileResolver(db_session)
         self.task_inference = TaskInferenceService()
         self.llm_policy = LLMPolicyService()
