@@ -14,6 +14,13 @@ EnforcementStatus = Literal["not_evaluated", "passes", "needs_coaching", "blocke
 ResultType = Literal["transformed", "coaching", "blocked"]
 FindingType = Literal["compliance", "pii"]
 FindingSeverity = Literal["low", "medium", "high"]
+GuideMeHelperKind = Literal[
+    "contextual_step_examples",
+    "refinement_options",
+    "specificity_refinement",
+    "answer_extraction",
+]
+AttachmentKind = Literal["document", "image"]
 
 
 class ConversationRequirement(BaseModel):
@@ -116,7 +123,8 @@ class TransformPromptRequest(BaseModel):
 
 
 class TransformMetadata(BaseModel):
-    persona_source: Literal["summary_override", "db_profile", "generic_default"]
+    execution_owner: Literal["transformer"] = "transformer"
+    persona_source: Literal["summary_override", "db_profile", "generic_default", "bypassed"]
     rules_applied: list[str]
     profile_version: str
     requested_provider: str
@@ -125,6 +133,8 @@ class TransformMetadata(BaseModel):
     resolved_model: str
     used_fallback_model: bool
     used_authoritative_tenant_llm: bool = False
+    transformation_applied: bool = True
+    bypass_reason: Optional[str] = None
     request_log_id: Optional[int] = Field(default=None, ge=1)
 
 
@@ -163,3 +173,77 @@ class TransformPromptResponse(BaseModel):
     findings: list[Finding] = Field(default_factory=list)
     scoring: Optional[PromptScoringSummary] = None
     metadata: TransformMetadata
+
+
+class ConversationHistoryTurn(BaseModel):
+    transformed_text: str = Field(min_length=1)
+    assistant_text: str = Field(min_length=1)
+
+
+class AttachmentReference(BaseModel):
+    id: str = Field(min_length=1, max_length=100)
+    kind: AttachmentKind
+    name: str = Field(min_length=1, max_length=255)
+    media_type: Optional[str] = None
+    provider_file_id: Optional[str] = None
+    size_bytes: Optional[int] = Field(default=None, ge=0)
+
+
+class GeneratedImagePayload(BaseModel):
+    media_type: str = "image/png"
+    base64_data: str = Field(min_length=1)
+
+
+class ExecuteChatRequest(BaseModel):
+    session_id: str = Field(min_length=1, max_length=255)
+    conversation_id: str = Field(min_length=1, max_length=255)
+    user_id_hash: str = Field(min_length=1, max_length=255)
+    raw_prompt: str = Field(min_length=1)
+    target_llm: TargetLLM
+    conversation: Optional[ConversationState] = Field(default=None)
+    conversation_history: list[ConversationHistoryTurn] = Field(default_factory=list)
+    attachments: list[AttachmentReference] = Field(default_factory=list)
+    summary_type: Optional[int] = Field(default=None, ge=1, le=9)
+    enforcement_level: Optional[EnforcementLevel] = Field(default=None)
+    transform_enabled: bool = True
+
+    @model_validator(mode="after")
+    def validate_conversation_id_match(self) -> "ExecuteChatRequest":
+        if self.conversation is not None and self.conversation.conversation_id != self.conversation_id:
+            raise ValueError("conversation.conversation_id must match conversation_id")
+        return self
+
+
+class ExecuteChatResponse(BaseModel):
+    session_id: str
+    conversation_id: str
+    user_id_hash: str
+    result_type: ResultType
+    task_type: Optional[str] = None
+    transformed_prompt: Optional[str] = None
+    assistant_text: str
+    assistant_images: list[GeneratedImagePayload] = Field(default_factory=list)
+    coaching_tip: Optional[str] = None
+    blocking_message: Optional[str] = None
+    conversation: Optional[ConversationState] = None
+    findings: list[Finding] = Field(default_factory=list)
+    scoring: Optional[PromptScoringSummary] = None
+    metadata: TransformMetadata
+
+
+class GuideMeHelperRequest(BaseModel):
+    session_id: str = Field(min_length=1, max_length=255)
+    conversation_id: str = Field(min_length=1, max_length=255)
+    user_id_hash: str = Field(min_length=1, max_length=255)
+    target_llm: TargetLLM
+    helper_kind: GuideMeHelperKind
+    prompt: str = Field(min_length=1)
+    max_output_tokens: int = Field(default=800, ge=1, le=4000)
+
+
+class GuideMeHelperResponse(BaseModel):
+    session_id: str
+    conversation_id: str
+    user_id_hash: str
+    helper_kind: GuideMeHelperKind
+    payload: dict

@@ -7,8 +7,18 @@ from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
 from app.core.logging import configure_application_logging
-from app.schemas.transform import TransformMetadata, TransformPromptRequest, TransformPromptResponse
+from app.schemas.transform import (
+    ExecuteChatRequest,
+    ExecuteChatResponse,
+    GuideMeHelperRequest,
+    GuideMeHelperResponse,
+    TransformMetadata,
+    TransformPromptRequest,
+    TransformPromptResponse,
+)
 from app.services.compliance_checks import ComplianceCheckService
+from app.services.final_response_service import FinalResponseService
+from app.services.guide_me_generation import GuideMeGenerationService
 from app.services.llm_policy import LLMPolicyService
 from app.services.pii_checks import PIICheckService
 from app.services.profile_resolver import ProfileResolver
@@ -17,7 +27,7 @@ from app.services.prompt_scoring import PromptScoringService
 from app.services.request_logger import RequestLogger
 from app.services.runtime_llm import RuntimeLlmConfigError, RuntimeLlmResolver
 from app.services.task_inference import TaskInferenceService
-from app.services.token_usage import merge_usage
+from app.services.token_usage import build_usage_entry, merge_usage, normalize_usage
 
 
 logger = logging.getLogger("prompt_transformer.transformer_engine")
@@ -48,6 +58,8 @@ class TransformerEngine:
         self.pii_checks = PIICheckService()
         self.request_logger = RequestLogger(db_session)
         self.runtime_llm = RuntimeLlmResolver(db_session)
+        self.final_response_service = FinalResponseService()
+        self.guide_me_generation = GuideMeGenerationService()
 
     def transform(self, payload: TransformPromptRequest) -> TransformPromptResponse:
         started_at = time.perf_counter()
@@ -127,6 +139,7 @@ class TransformerEngine:
             rules_applied = task_rules + enforcement_rules + persona_rules + model_rules
 
             metadata = TransformMetadata(
+                execution_owner="transformer",
                 persona_source=persona.source,
                 rules_applied=rules_applied,
                 profile_version=persona.profile_version,
@@ -139,6 +152,8 @@ class TransformerEngine:
                     payload.target_llm.provider != runtime_llm.provider
                     or payload.target_llm.model != runtime_llm.model
                 ),
+                transformation_applied=result_type == "transformed",
+                bypass_reason=None,
                 request_log_id=None,
             )
 
@@ -243,6 +258,173 @@ class TransformerEngine:
             total_ms,
             " ".join(timing_parts),
         )
+
+    def execute_chat(self, payload: ExecuteChatRequest) -> ExecuteChatResponse:
+        try:
+            runtime_llm = self.runtime_llm.resolve(payload.user_id_hash)
+        except RuntimeLlmConfigError as exc:
+            raise ValueError(str(exc)) from exc
+
+        if not payload.transform_enabled or not runtime_llm.transformation_enabled:
+            bypass_reason = (
+                "tenant_transformation_disabled"
+                if not runtime_llm.transformation_enabled
+                else "prompt_transform_disabled"
+            )
+            assistant_result = self.final_response_service.generate(
+                runtime_config=runtime_llm,
+                resolved_model=runtime_llm.model,
+                transformed_prompt=payload.raw_prompt,
+                conversation_history=payload.conversation_history,
+                attachments=payload.attachments,
+            )
+            metadata = TransformMetadata(
+                execution_owner="transformer",
+                persona_source="bypassed",
+                rules_applied=[],
+                profile_version="bypassed",
+                requested_provider=payload.target_llm.provider,
+                requested_model=payload.target_llm.model,
+                resolved_provider=runtime_llm.provider,
+                resolved_model=runtime_llm.model,
+                used_fallback_model=False,
+                used_authoritative_tenant_llm=(
+                    payload.target_llm.provider != runtime_llm.provider
+                    or payload.target_llm.model != runtime_llm.model
+                ),
+                transformation_applied=False,
+                bypass_reason=bypass_reason,
+                request_log_id=None,
+            )
+            return ExecuteChatResponse(
+                session_id=payload.session_id,
+                conversation_id=payload.conversation_id,
+                user_id_hash=payload.user_id_hash,
+                result_type="transformed",
+                task_type="bypassed",
+                transformed_prompt=payload.raw_prompt,
+                assistant_text=assistant_result.text,
+                assistant_images=assistant_result.generated_images,
+                coaching_tip=None,
+                blocking_message=None,
+                conversation=payload.conversation,
+                findings=[],
+                scoring=None,
+                metadata=metadata,
+            )
+
+        transform_response = self.transform(
+            TransformPromptRequest(
+                session_id=payload.session_id,
+                conversation_id=payload.conversation_id,
+                user_id_hash=payload.user_id_hash,
+                raw_prompt=payload.raw_prompt,
+                target_llm=payload.target_llm,
+                conversation=payload.conversation,
+                summary_type=payload.summary_type,
+                enforcement_level=payload.enforcement_level,
+            )
+        )
+
+        if transform_response.result_type == "blocked":
+            assistant_text = transform_response.blocking_message or "This request cannot be sent to the LLM as written."
+            return ExecuteChatResponse(
+                session_id=transform_response.session_id,
+                conversation_id=transform_response.conversation_id,
+                user_id_hash=transform_response.user_id_hash,
+                result_type=transform_response.result_type,
+                task_type=transform_response.task_type,
+                transformed_prompt=transform_response.transformed_prompt,
+                assistant_text=assistant_text,
+                assistant_images=[],
+                coaching_tip=transform_response.coaching_tip,
+                blocking_message=transform_response.blocking_message,
+                conversation=transform_response.conversation,
+                findings=transform_response.findings,
+                scoring=transform_response.scoring,
+                metadata=transform_response.metadata,
+            )
+
+        if transform_response.result_type == "coaching":
+            assistant_text = _enhance_coaching_tip(
+                transform_response.coaching_tip,
+                raw_user_text=payload.raw_prompt,
+                transformer_conversation=(
+                    transform_response.conversation.model_dump()
+                    if transform_response.conversation is not None
+                    else None
+                ),
+            )
+            return ExecuteChatResponse(
+                session_id=transform_response.session_id,
+                conversation_id=transform_response.conversation_id,
+                user_id_hash=transform_response.user_id_hash,
+                result_type=transform_response.result_type,
+                task_type=transform_response.task_type,
+                transformed_prompt=transform_response.transformed_prompt,
+                assistant_text=assistant_text,
+                assistant_images=[],
+                coaching_tip=transform_response.coaching_tip,
+                blocking_message=transform_response.blocking_message,
+                conversation=transform_response.conversation,
+                findings=transform_response.findings,
+                scoring=transform_response.scoring,
+                metadata=transform_response.metadata,
+            )
+
+        assistant_result = self.final_response_service.generate(
+            runtime_config=runtime_llm,
+            resolved_model=transform_response.metadata.resolved_model,
+            transformed_prompt=transform_response.transformed_prompt or payload.raw_prompt,
+            conversation_history=payload.conversation_history,
+            attachments=payload.attachments,
+        )
+        if transform_response.metadata.request_log_id is not None:
+            self.request_logger.set_final_response_usage(
+                transform_response.metadata.request_log_id,
+                build_usage_entry(
+                    category="final_response",
+                    purpose="final_response",
+                    provider=runtime_llm.provider,
+                    model=transform_response.metadata.resolved_model,
+                    usage=normalize_usage(runtime_llm.provider, assistant_result.usage),
+                ),
+            )
+        return ExecuteChatResponse(
+            session_id=transform_response.session_id,
+            conversation_id=transform_response.conversation_id,
+            user_id_hash=transform_response.user_id_hash,
+            result_type=transform_response.result_type,
+            task_type=transform_response.task_type,
+            transformed_prompt=transform_response.transformed_prompt,
+            assistant_text=assistant_result.text,
+            assistant_images=assistant_result.generated_images,
+            coaching_tip=transform_response.coaching_tip,
+            blocking_message=transform_response.blocking_message,
+            conversation=transform_response.conversation,
+            findings=transform_response.findings,
+            scoring=transform_response.scoring,
+            metadata=transform_response.metadata,
+        )
+
+    def generate_guide_me_helper(self, payload: GuideMeHelperRequest) -> GuideMeHelperResponse:
+        try:
+            runtime_llm = self.runtime_llm.resolve(payload.user_id_hash)
+            helper_payload = self.guide_me_generation.generate(
+                helper_kind=payload.helper_kind,
+                prompt=payload.prompt,
+                runtime_config=runtime_llm,
+                max_output_tokens=payload.max_output_tokens,
+            )
+            return GuideMeHelperResponse(
+                session_id=payload.session_id,
+                conversation_id=payload.conversation_id,
+                user_id_hash=payload.user_id_hash,
+                helper_kind=payload.helper_kind,
+                payload=helper_payload,
+            )
+        except RuntimeLlmConfigError as exc:
+            raise ValueError(str(exc)) from exc
 
     def _build_prompt(
         self,

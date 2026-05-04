@@ -5,9 +5,13 @@ from sqlalchemy.orm import Session
 from app.api.deps import require_service_auth
 from app.db.session import get_db
 from app.schemas.transform import (
+    ExecuteChatRequest,
+    ExecuteChatResponse,
     FinalResponseUsageRequest,
     FinalResponseUsageResponse,
     ConversationScoreResponse,
+    GuideMeHelperRequest,
+    GuideMeHelperResponse,
     ResolvedProfileResponse,
     TransformPromptRequest,
     TransformPromptResponse,
@@ -36,6 +40,58 @@ def transform_prompt(
     try:
         engine = TransformerEngine(db_session=db)
         return engine.transform(payload)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc),
+        ) from exc
+    except OperationalError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database unavailable",
+        ) from exc
+    except SQLAlchemyTimeoutError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database connection pool exhausted",
+        ) from exc
+
+
+@router.post("/chat/execute", response_model=ExecuteChatResponse)
+def execute_chat(
+    payload: ExecuteChatRequest,
+    _: str = Depends(require_service_auth),
+    db: Session = Depends(get_db),
+) -> ExecuteChatResponse:
+    try:
+        engine = TransformerEngine(db_session=db)
+        return engine.execute_chat(payload)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc),
+        ) from exc
+    except OperationalError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database unavailable",
+        ) from exc
+    except SQLAlchemyTimeoutError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database connection pool exhausted",
+        ) from exc
+
+
+@router.post("/guide_me/generate", response_model=GuideMeHelperResponse)
+def generate_guide_me_helper(
+    payload: GuideMeHelperRequest,
+    _: str = Depends(require_service_auth),
+    db: Session = Depends(get_db),
+) -> GuideMeHelperResponse:
+    try:
+        engine = TransformerEngine(db_session=db)
+        return engine.generate_guide_me_helper(payload)
     except ValueError as exc:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
