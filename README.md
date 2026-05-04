@@ -212,6 +212,12 @@ Example successful response:
 
 See [docs/api_contract.md](./docs/api_contract.md) for request/response rules and expected behaviors.
 
+Implementation specs for major runtime features live in `docs/`, including:
+
+- [docs/prompt_enforcement_implementation_spec.md](./docs/prompt_enforcement_implementation_spec.md)
+- [docs/prompt_scoring_implementation_spec.md](./docs/prompt_scoring_implementation_spec.md)
+- [docs/token_usage_implementation_spec.md](./docs/token_usage_implementation_spec.md)
+
 Prompt Transformer now owns the field-level scoring contract used by downstream clients. Consumers should read:
 
 - `conversation.requirements.who`

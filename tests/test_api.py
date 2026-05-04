@@ -526,6 +526,162 @@ def test_transform_logs_new_result_fields_when_request_logging_enabled(client) -
         settings.enable_request_logging = original_enable_request_logging
 
 
+def test_transform_returns_request_log_id_and_persists_request_row(client) -> None:
+    _seed_final_profiles(client)
+
+    response = client.post(
+        "/api/transform_prompt",
+        headers=AUTH_HEADERS,
+        json={
+            "session_id": "sess_request_identity",
+            "conversation_id": "conv_request_identity",
+            "user_id_hash": "user_1",
+            "raw_prompt": "Explain this concept simply",
+            "target_llm": {"provider": "openai", "model": "gpt-4.1"},
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["metadata"]["request_log_id"] is not None
+
+    db = next(client.app.dependency_overrides[get_db]())
+    try:
+        log_row = db.get(PromptTransformRequest, body["metadata"]["request_log_id"])
+        assert log_row is not None
+        assert log_row.session_id == "sess_request_identity"
+        assert log_row.metadata_json["request_log_id"] == body["metadata"]["request_log_id"]
+    finally:
+        db.close()
+
+
+def test_final_response_usage_endpoint_updates_request_token_usage(client) -> None:
+    _seed_final_profiles(client)
+
+    transform_response = client.post(
+        "/api/transform_prompt",
+        headers=AUTH_HEADERS,
+        json={
+            "session_id": "sess_final_usage",
+            "conversation_id": "conv_final_usage",
+            "user_id_hash": "user_1",
+            "raw_prompt": "Explain this concept simply",
+            "target_llm": {"provider": "openai", "model": "gpt-4.1"},
+        },
+    )
+
+    assert transform_response.status_code == 200
+    request_log_id = transform_response.json()["metadata"]["request_log_id"]
+
+    usage_response = client.post(
+        "/api/request_usage/final_response",
+        headers=AUTH_HEADERS,
+        json={
+            "request_log_id": request_log_id,
+            "provider": "openai",
+            "model": "gpt-4.1",
+            "usage": {
+                "input_tokens": 820,
+                "output_tokens": 260,
+                "total_tokens": 1080,
+                "raw_usage": {
+                    "prompt_tokens": 820,
+                    "completion_tokens": 260,
+                    "total_tokens": 1080,
+                },
+            },
+        },
+    )
+
+    assert usage_response.status_code == 200
+    assert usage_response.json() == {
+        "request_log_id": request_log_id,
+        "status": "updated",
+    }
+
+    db = next(client.app.dependency_overrides[get_db]())
+    try:
+        log_row = db.get(PromptTransformRequest, request_log_id)
+        assert log_row is not None
+        assert log_row.token_usage_json["final_response"]["input_tokens"] == 820
+        assert log_row.token_usage_json["final_response"]["output_tokens"] == 260
+        assert log_row.token_usage_json["final_response"]["total_tokens"] == 1080
+        assert log_row.token_usage_json["final_response"]["calls"] == 1
+        assert log_row.token_usage_json["providers"] == [
+            {
+                "category": "final_response",
+                "purpose": "final_response",
+                "provider": "openai",
+                "model": "gpt-4.1",
+                "input_tokens": 820,
+                "output_tokens": 260,
+                "total_tokens": 1080,
+                "raw_usage": {
+                    "prompt_tokens": 820,
+                    "completion_tokens": 260,
+                    "total_tokens": 1080,
+                },
+            }
+        ]
+    finally:
+        db.close()
+
+
+def test_final_response_usage_endpoint_is_idempotent_for_same_request(client) -> None:
+    _seed_final_profiles(client)
+
+    transform_response = client.post(
+        "/api/transform_prompt",
+        headers=AUTH_HEADERS,
+        json={
+            "session_id": "sess_final_usage_idempotent",
+            "conversation_id": "conv_final_usage_idempotent",
+            "user_id_hash": "user_1",
+            "raw_prompt": "Explain this concept simply",
+            "target_llm": {"provider": "openai", "model": "gpt-4.1"},
+        },
+    )
+
+    assert transform_response.status_code == 200
+    request_log_id = transform_response.json()["metadata"]["request_log_id"]
+
+    usage_payload = {
+        "request_log_id": request_log_id,
+        "provider": "openai",
+        "model": "gpt-4.1",
+        "usage": {
+            "input_tokens": 820,
+            "output_tokens": 260,
+            "total_tokens": 1080,
+        },
+    }
+
+    first_response = client.post(
+        "/api/request_usage/final_response",
+        headers=AUTH_HEADERS,
+        json=usage_payload,
+    )
+    second_response = client.post(
+        "/api/request_usage/final_response",
+        headers=AUTH_HEADERS,
+        json=usage_payload,
+    )
+
+    assert first_response.status_code == 200
+    assert second_response.status_code == 200
+
+    db = next(client.app.dependency_overrides[get_db]())
+    try:
+        log_row = db.get(PromptTransformRequest, request_log_id)
+        assert log_row is not None
+        assert log_row.token_usage_json["final_response"]["input_tokens"] == 820
+        assert log_row.token_usage_json["final_response"]["output_tokens"] == 260
+        assert log_row.token_usage_json["final_response"]["total_tokens"] == 1080
+        assert log_row.token_usage_json["final_response"]["calls"] == 1
+    finally:
+        db.close()
+
+
 def test_transform_creates_conversation_score_rollup(client) -> None:
     _seed_final_profiles(client)
     _update_profile(client, "user_1", prompt_enforcement_level="full")

@@ -5,6 +5,8 @@ from sqlalchemy.orm import Session
 from app.api.deps import require_service_auth
 from app.db.session import get_db
 from app.schemas.transform import (
+    FinalResponseUsageRequest,
+    FinalResponseUsageResponse,
     ConversationScoreResponse,
     ResolvedProfileResponse,
     TransformPromptRequest,
@@ -12,7 +14,10 @@ from app.schemas.transform import (
 )
 from app.services.profile_resolver import ProfileResolver
 from app.services.conversation_scores import ConversationScoreService
+from app.services.llm_types import NormalizedTokenUsage
+from app.services.request_logger import RequestLogger
 from app.services.transformer_engine import TransformerEngine
+from app.services.token_usage import build_usage_entry
 
 router = APIRouter(prefix="/api", tags=["prompt-transformer"])
 
@@ -97,6 +102,43 @@ def resolve_profile(
     except ValueError as exc:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc),
+        ) from exc
+    except OperationalError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database unavailable",
+        ) from exc
+    except SQLAlchemyTimeoutError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database connection pool exhausted",
+        ) from exc
+
+
+@router.post("/request_usage/final_response", response_model=FinalResponseUsageResponse)
+def record_final_response_usage(
+    payload: FinalResponseUsageRequest,
+    _: str = Depends(require_service_auth),
+    db: Session = Depends(get_db),
+) -> FinalResponseUsageResponse:
+    try:
+        request_logger = RequestLogger(db_session=db)
+        usage_entry = build_usage_entry(
+            category="final_response",
+            purpose="final_response",
+            provider=payload.provider,
+            model=payload.model,
+            usage=NormalizedTokenUsage(**payload.usage.model_dump()),
+        )
+        request_logger.set_final_response_usage(payload.request_log_id, usage_entry)
+        return FinalResponseUsageResponse(
+            request_log_id=payload.request_log_id,
+            status="updated",
+        )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
             detail=str(exc),
         ) from exc
     except OperationalError as exc:

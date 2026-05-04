@@ -30,6 +30,7 @@ class PromptTransformRequest(Base):
     conversation_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
     findings_json: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
     metadata_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    token_usage_json: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,

@@ -8,8 +8,9 @@ from typing import Any, Optional
 from app.core.config import get_settings
 from app.core.logging import configure_application_logging
 from app.services.llm_gateway import LlmGatewayService
-from app.services.runtime_llm import RuntimeLlmConfig
 from app.services.llm_types import TransformerLlmRequest
+from app.services.runtime_llm import RuntimeLlmConfig
+from app.services.token_usage import build_usage_entry
 
 
 logger = logging.getLogger("prompt_transformer.structure_evaluator")
@@ -30,7 +31,7 @@ class StructureEvaluationService:
         raw_prompt: str,
         enforcement_level: str,
         runtime_config: RuntimeLlmConfig | None = None,
-    ) -> Optional[dict[str, Any]]:
+    ) -> tuple[Optional[dict[str, Any]], Optional[dict[str, Any]]]:
         enabled = self.is_enabled()
         if not enabled or runtime_config is None:
             logger.info(
@@ -40,7 +41,7 @@ class StructureEvaluationService:
                 runtime_config is not None,
                 runtime_config.model if runtime_config is not None else None,
             )
-            return None
+            return None, None
 
         logger.info(
             "structure_evaluator_request model=%s base_url=%s prompt_chars=%s enforcement_level=%s",
@@ -78,10 +79,17 @@ class StructureEvaluationService:
                     response_error.status_code,
                     response_error.message,
                 )
-                return None
+                return None, None
             if response_payload is None:
                 logger.warning("structure_evaluator_empty_gateway_response")
-                return None
+                return None, None
+            usage_entry = build_usage_entry(
+                category="admin",
+                purpose="structure_evaluator",
+                provider=response_payload.provider,
+                model=response_payload.model,
+                usage=response_payload.normalized_usage,
+            )
             text = response_payload.output_text
             if not text:
                 logger.warning(
@@ -93,14 +101,14 @@ class StructureEvaluationService:
                         else None
                     ),
                 )
-                return None
+                return None, usage_entry
             parsed = self._parse_output_json(text)
             if not isinstance(parsed, dict):
                 logger.warning(
                     "structure_evaluator_invalid_payload_type parsed_type=%s",
                     type(parsed).__name__,
                 )
-                return None
+                return None, usage_entry
             logger.info(
                 "structure_evaluator_success status_code=%s returned_fields=%s",
                 response_payload.status_code,
@@ -126,14 +134,25 @@ class StructureEvaluationService:
                 "structure_evaluator_field_diagnostics %s",
                 field_diagnostics,
             )
-            return parsed
+            return parsed, usage_entry
         except json.JSONDecodeError as exc:
             logger.warning(
                 "structure_evaluator_json_decode_error error=%s text_sample=%s",
                 str(exc),
                 self._truncate_for_log(text if "text" in locals() else None),
             )
-            return None
+            usage_entry = (
+                build_usage_entry(
+                    category="admin",
+                    purpose="structure_evaluator",
+                    provider=response_payload.provider,
+                    model=response_payload.model,
+                    usage=response_payload.normalized_usage,
+                )
+                if "response_payload" in locals() and response_payload is not None
+                else None
+            )
+            return None, usage_entry
         except ValueError as exc:
             logger.warning(
                 "structure_evaluator_value_error error=%s text_sample=%s response_keys=%s",
@@ -145,7 +164,18 @@ class StructureEvaluationService:
                     else None
                 ),
             )
-            return None
+            usage_entry = (
+                build_usage_entry(
+                    category="admin",
+                    purpose="structure_evaluator",
+                    provider=response_payload.provider,
+                    model=response_payload.model,
+                    usage=response_payload.normalized_usage,
+                )
+                if "response_payload" in locals() and response_payload is not None
+                else None
+            )
+            return None, usage_entry
 
     def _build_system_prompt(self) -> str:
         return (

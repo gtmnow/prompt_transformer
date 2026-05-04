@@ -125,6 +125,29 @@ class TransformMetadata(BaseModel):
     resolved_model: str
     used_fallback_model: bool
     used_authoritative_tenant_llm: bool = False
+    request_log_id: Optional[int] = Field(default=None, ge=1)
+
+
+class TokenUsageWritePayload(BaseModel):
+    input_tokens: int = Field(ge=0)
+    output_tokens: int = Field(ge=0)
+    total_tokens: Optional[int] = Field(default=None, ge=0)
+    reasoning_tokens: Optional[int] = Field(default=None, ge=0)
+    cache_read_tokens: Optional[int] = Field(default=None, ge=0)
+    cache_write_tokens: Optional[int] = Field(default=None, ge=0)
+    raw_usage: Optional[dict] = None
+
+
+class FinalResponseUsageRequest(BaseModel):
+    request_log_id: int = Field(ge=1)
+    provider: str = Field(min_length=1, max_length=100)
+    model: str = Field(min_length=1, max_length=200)
+    usage: TokenUsageWritePayload
+
+
+class FinalResponseUsageResponse(BaseModel):
+    request_log_id: int
+    status: Literal["updated"]
 
 
 class TransformPromptResponse(BaseModel):

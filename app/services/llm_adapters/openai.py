@@ -7,6 +7,7 @@ import httpx
 from app.services.llm_adapters.base import BaseLlmAdapter
 from app.services.llm_provider_profiles import ResolvedLlmProviderProfile
 from app.services.llm_types import TransformerLlmError, TransformerLlmRequest, TransformerLlmResponse
+from app.services.token_usage import normalize_usage
 
 
 class OpenAIAdapter(BaseLlmAdapter):
@@ -26,6 +27,7 @@ class OpenAIAdapter(BaseLlmAdapter):
             response_payload = response.json()
             response.raise_for_status()
             output_text = self._extract_output_text(profile, response_payload)
+            usage = self._extract_usage(response_payload)
             return (
                 TransformerLlmResponse(
                     provider=request.provider,
@@ -33,7 +35,8 @@ class OpenAIAdapter(BaseLlmAdapter):
                     output_text=output_text,
                     status_code=response.status_code,
                     finish_reason=self._extract_finish_reason(profile, response_payload),
-                    usage=self._extract_usage(response_payload),
+                    usage=usage,
+                    normalized_usage=normalize_usage(request.provider, usage),
                     raw_payload=response_payload if isinstance(response_payload, dict) else None,
                 ),
                 None,

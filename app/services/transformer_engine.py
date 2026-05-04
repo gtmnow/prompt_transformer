@@ -17,6 +17,7 @@ from app.services.prompt_scoring import PromptScoringService
 from app.services.request_logger import RequestLogger
 from app.services.runtime_llm import RuntimeLlmConfigError, RuntimeLlmResolver
 from app.services.task_inference import TaskInferenceService
+from app.services.token_usage import merge_usage
 
 
 logger = logging.getLogger("prompt_transformer.transformer_engine")
@@ -54,6 +55,7 @@ class TransformerEngine:
         task_type = "unknown"
         result_type = "error"
         persona_source = "unknown"
+        request_log_id: int | None = None
 
         try:
             runtime_llm = self.runtime_llm.resolve(payload.user_id_hash)
@@ -76,7 +78,7 @@ class TransformerEngine:
             timings_ms["policy_resolve"] = (time.perf_counter() - step_started_at) * 1000
 
             step_started_at = time.perf_counter()
-            conversation, enforcement_rules, coaching_tip, requirement_trace = self.prompt_requirements.evaluate(
+            conversation, enforcement_rules, coaching_tip, requirement_trace, evaluator_usage_entry = self.prompt_requirements.evaluate(
                 conversation_id=payload.conversation_id,
                 raw_prompt=payload.raw_prompt,
                 conversation=payload.conversation,
@@ -137,6 +139,7 @@ class TransformerEngine:
                     payload.target_llm.provider != runtime_llm.provider
                     or payload.target_llm.model != runtime_llm.model
                 ),
+                request_log_id=None,
             )
 
             step_started_at = time.perf_counter()
@@ -159,7 +162,7 @@ class TransformerEngine:
             timings_ms["scoring_dispatch"] = (time.perf_counter() - step_started_at) * 1000
 
             step_started_at = time.perf_counter()
-            self.request_logger.log(
+            request_row = self.request_logger.log(
                 {
                     "session_id": payload.session_id,
                     "conversation_id": payload.conversation_id,
@@ -180,8 +183,14 @@ class TransformerEngine:
                     "conversation_json": conversation.model_dump(),
                     "findings_json": [finding.model_dump() for finding in findings],
                     "metadata_json": metadata.model_dump(),
+                    "token_usage_json": merge_usage(None, evaluator_usage_entry),
                 }
             )
+            request_log_id = request_row.id
+            metadata.request_log_id = request_log_id
+            request_row.metadata_json = metadata.model_dump()
+            self.db_session.add(request_row)
+            self.db_session.commit()
             timings_ms["request_log"] = (time.perf_counter() - step_started_at) * 1000
 
             return TransformPromptResponse(

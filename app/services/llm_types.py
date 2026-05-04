@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 LlmProvider = Literal["openai", "xai", "azure_openai", "anthropic"]
@@ -22,6 +22,22 @@ class TransformerLlmRequest(BaseModel):
     timeout_seconds: float = Field(default=15.0, gt=0.0, le=120.0)
 
 
+class NormalizedTokenUsage(BaseModel):
+    input_tokens: int | None = Field(default=None, ge=0)
+    output_tokens: int | None = Field(default=None, ge=0)
+    total_tokens: int | None = Field(default=None, ge=0)
+    reasoning_tokens: int | None = Field(default=None, ge=0)
+    cache_read_tokens: int | None = Field(default=None, ge=0)
+    cache_write_tokens: int | None = Field(default=None, ge=0)
+    raw_usage: dict[str, Any] | None = None
+
+    @model_validator(mode="after")
+    def populate_total_tokens(self) -> "NormalizedTokenUsage":
+        if self.total_tokens is None and self.input_tokens is not None and self.output_tokens is not None:
+            self.total_tokens = self.input_tokens + self.output_tokens
+        return self
+
+
 class TransformerLlmResponse(BaseModel):
     provider: LlmProvider
     model: str
@@ -29,6 +45,7 @@ class TransformerLlmResponse(BaseModel):
     status_code: int | None = None
     finish_reason: str | None = None
     usage: dict[str, Any] | None = None
+    normalized_usage: NormalizedTokenUsage | None = None
     raw_payload: dict[str, Any] | list[Any] | None = None
 
 

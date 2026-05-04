@@ -94,8 +94,8 @@ class PromptRequirementService:
         conversation: Optional[ConversationState],
         enforcement_level: str,
         runtime_config: RuntimeLlmConfig | None = None,
-    ) -> tuple[ConversationState, list[str], Optional[str], "RequirementEvaluationTrace"]:
-        requirements, evaluator_used, evaluator_coaching_tip, evaluation_trace = self._merge_requirements(
+    ) -> tuple[ConversationState, list[str], Optional[str], "RequirementEvaluationTrace", Optional[dict[str, object]]]:
+        requirements, evaluator_used, evaluator_coaching_tip, evaluation_trace, evaluator_usage_entry = self._merge_requirements(
             raw_prompt=raw_prompt,
             conversation=conversation,
             enforcement_level=enforcement_level,
@@ -149,7 +149,7 @@ class PromptRequirementService:
         elif coaching_fields:
             coaching_tip = self._build_coaching_tip(coaching_fields, enforcement_level)
 
-        return updated_conversation, rules_applied, coaching_tip, evaluation_trace
+        return updated_conversation, rules_applied, coaching_tip, evaluation_trace, evaluator_usage_entry
 
     def _build_coaching_tip(self, missing_fields: list[str], enforcement_level: str) -> str:
         if missing_fields == ["labeled_structure"]:
@@ -185,9 +185,15 @@ class PromptRequirementService:
         conversation: Optional[ConversationState],
         enforcement_level: str,
         runtime_config: RuntimeLlmConfig | None = None,
-    ) -> tuple[dict[str, ConversationRequirement], bool, Optional[str], "RequirementEvaluationTrace"]:
+    ) -> tuple[
+        dict[str, ConversationRequirement],
+        bool,
+        Optional[str],
+        "RequirementEvaluationTrace",
+        Optional[dict[str, object]],
+    ]:
         existing = conversation.requirements if conversation is not None else {}
-        evaluator_payload = self.structure_evaluator.evaluate(
+        evaluator_payload, evaluator_usage_entry = self.structure_evaluator.evaluate(
             raw_prompt=raw_prompt,
             enforcement_level=enforcement_level,
             runtime_config=runtime_config,
@@ -240,6 +246,7 @@ class PromptRequirementService:
                 fused=merged_conversation,
                 evaluator_used=evaluator_used,
             ),
+            evaluator_usage_entry,
         )
 
     def _read_evaluator_requirement(
